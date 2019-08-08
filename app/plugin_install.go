@@ -144,6 +144,12 @@ func (a *App) installPluginLocally(pluginFile io.ReadSeeker, replace bool) (*mod
 	}
 	f.Close()
 
+	// Create bundle
+	err = pluginsEnvironment.GenerateBundle(manifest.Id)
+	if err != nil {
+		return nil, model.NewAppError("uploadPlugin", "app.plugin.flag_managed.app_error", nil, err.Error(), http.StatusInternalServerError)
+	}
+
 	if stashed != nil && stashed.Enable {
 		a.EnablePlugin(manifest.Id)
 	}
@@ -160,6 +166,11 @@ func (a *App) RemovePlugin(id string) *model.AppError {
 }
 
 func (a *App) removePlugin(id string) *model.AppError {
+	// Disable plugin before removal and notify cluster peers inline.
+	if err := a.DisablePlugin(id); err != nil {
+		return err
+	}
+
 	if err := a.removePluginLocally(id); err != nil {
 		return err
 	}
@@ -212,15 +223,8 @@ func (a *App) removePluginLocally(id string) *model.AppError {
 		return model.NewAppError("removePlugin", "app.plugin.not_installed.app_error", nil, "", http.StatusBadRequest)
 	}
 
-	if pluginsEnvironment.IsActive(id) && manifest.HasClient() {
-		message := model.NewWebSocketEvent(model.WEBSOCKET_EVENT_PLUGIN_DISABLED, "", "", "", nil)
-		message.Add("manifest", manifest.ClientManifest())
-		a.Publish(message)
-	}
-
 	pluginsEnvironment.Deactivate(id)
 	pluginsEnvironment.RemovePlugin(id)
-	a.UnregisterPluginCommands(id)
 
 	err = os.RemoveAll(pluginPath)
 	if err != nil {

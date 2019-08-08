@@ -270,6 +270,63 @@ func (env *Environment) Activate(id string) (manifest *model.Manifest, activated
 	return pluginInfo.Manifest, true, nil
 }
 
+func (env *Environment) GenerateBundle(id string) (reterr error) {
+	plugins, err := env.Available()
+	if err != nil {
+		return err
+	}
+	var pluginInfo *model.BundleInfo
+	for _, p := range plugins {
+		if p.Manifest != nil && p.Manifest.Id == id {
+			if pluginInfo != nil {
+				return fmt.Errorf("multiple plugins found: %v", id)
+			}
+			pluginInfo = p
+		}
+	}
+	if pluginInfo == nil {
+		return fmt.Errorf("plugin not found: %v", id)
+	}
+
+	if pluginInfo.Manifest.HasWebapp() {
+		bundlePath := filepath.Clean(pluginInfo.Manifest.Webapp.BundlePath)
+		if bundlePath == "" || bundlePath[0] == '.' {
+			return fmt.Errorf("invalid webapp bundle path")
+		}
+		bundlePath = filepath.Join(env.pluginDir, id, bundlePath)
+		destinationPath := filepath.Join(env.webappPluginDir, id)
+
+		if err := os.RemoveAll(destinationPath); err != nil {
+			return errors.Wrapf(err, "unable to remove old webapp bundle directory: %v", destinationPath)
+		}
+
+		if err := utils.CopyDir(filepath.Dir(bundlePath), destinationPath); err != nil {
+			return errors.Wrapf(err, "unable to copy webapp bundle directory: %v", id)
+		}
+
+		sourceBundleFilepath := filepath.Join(destinationPath, filepath.Base(bundlePath))
+
+		sourceBundleFileContents, err := ioutil.ReadFile(sourceBundleFilepath)
+		if err != nil {
+			return errors.Wrapf(err, "unable to read webapp bundle: %v", id)
+		}
+
+		hash := fnv.New64a()
+		hash.Write(sourceBundleFileContents)
+		pluginInfo.Manifest.Webapp.BundleHash = hash.Sum([]byte{})
+
+		if err := os.Rename(
+			sourceBundleFilepath,
+			filepath.Join(destinationPath, fmt.Sprintf("%s_%x_bundle.js", id, pluginInfo.Manifest.Webapp.BundleHash)),
+		); err != nil {
+			return errors.Wrapf(err, "unable to rename webapp bundle: %v", id)
+		}
+
+	}
+
+	return nil
+}
+
 func (env *Environment) RemovePlugin(id string) {
 	if _, ok := env.registeredPlugins.Load(id); ok {
 		env.registeredPlugins.Delete(id)
